@@ -27,9 +27,19 @@ Durante o assessment, o pipeline disparou às 01:13 h e entregou um binário que
 
 ```yaml
 # .github/workflows/branch-protect.yml
-required_approving_review_count: 2
-enforce_admins: true
-require_signed_commits: true
+- uses: hardened-sh/create-or-update-protected-branch@v2
+  with:
+    token: ${{ secrets.GITHUB_TOKEN }}
+    repository: ${{ github.repository }}
+    branch: main
+    required_status_checks: |
+      build
+      test
+      security-scan
+    required_pull_request_reviews: true
+    required_approving_review_count: 2
+    enforce_admins: true
+    require_signed_commits: true
 ```
 
 ### 2. Eliminação de Segredos Estáticos com OIDC
@@ -203,7 +213,7 @@ cosign verify-attestation \
 
 ### branch-protect.yml
 
-Aplica automaticamente proteções à branch main toda semana:
+Aplica automaticamente proteções à branch main toda semana usando a action customizada [hardened-sh/create-or-update-protected-branch](https://github.com/hardened-sh/create-or-update-protected-branch):
 
 - Status checks obrigatórios
 - 2 aprovadores mínimos

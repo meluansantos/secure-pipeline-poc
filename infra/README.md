@@ -4,7 +4,7 @@ Este diretório contém Infrastructure as Code (IaC).
 
 Conforme definido no [CODEOWNERS](../.github/CODEOWNERS), alterações neste diretório requerem aprovação de:
 
-- @luan0x73
+- @hardened-sh
 - @infra-lead
 
 ## Segurança
