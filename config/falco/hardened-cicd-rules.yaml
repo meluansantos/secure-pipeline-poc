@@ -1,0 +1,171 @@
+# =============================================================================
+# Falco Rules - Detecção de Container Escape e Comportamento Malicioso
+# =============================================================================
+# Falco monitora eventos de syscalls críticos (ex.: execve de binários 
+# inesperados, criação de sockets privilegiados) e gera alertas em tempo real.
+#
+# Para instalar Falco:
+#   sudo apt-get install -y falco
+#   sudo systemctl start falco
+# =============================================================================
+
+# Arquivo: /etc/falco/rules.d/hardened-cicd.yaml
+# Copiar este arquivo para o diretório de regras do Falco
+
+# =============================================================================
+# Regras para detecção de escapes de container em pipelines CI/CD
+# =============================================================================
+
+- rule: Detect Container Escape via Docker Socket
+  desc: Detecta tentativas de escape de container via docker.sock
+  condition: >
+    spawned_process and
+    container and
+    (proc.name = "docker" or proc.name = "dockerd") and
+    (proc.cmdline contains "exec" or 
+     proc.cmdline contains "run" or 
+     proc.cmdline contains "create")
+  output: >
+    CRITICAL: Possível container escape via Docker CLI 
+    (user=%user.name container=%container.name image=%container.image.repository 
+    command=%proc.cmdline parent=%proc.pname)
+  priority: CRITICAL
+  tags: [container, escape, docker]
+
+- rule: Detect Mount of Docker Socket
+  desc: Detecta montagem do docker.sock dentro de containers
+  condition: >
+    open_read and
+    container and
+    fd.name = "/var/run/docker.sock"
+  output: >
+    CRITICAL: Container acessando docker.sock 
+    (user=%user.name container=%container.name image=%container.image.repository)
+  priority: CRITICAL
+  tags: [container, escape, docker]
+
+- rule: Runner Privilege Escalation
+  desc: Detecta tentativas de escalação de privilégio em runners
+  condition: >
+    spawned_process and
+    container and
+    (proc.name in (su, sudo, setuid) or
+     proc.cmdline contains "chmod +s" or
+     proc.cmdline contains "chown root")
+  output: >
+    WARNING: Tentativa de escalação de privilégio em runner 
+    (user=%user.name container=%container.name command=%proc.cmdline)
+  priority: WARNING
+  tags: [privilege, escalation]
+
+- rule: Suspicious Process in CI Container
+  desc: Detecta processos suspeitos em containers de CI
+  condition: >
+    spawned_process and
+    container and
+    proc.name in (nc, ncat, netcat, nmap, socat, telnet, wget, curl) and
+    (proc.cmdline contains "reverse" or
+     proc.cmdline contains "shell" or
+     proc.cmdline contains "-e /bin" or
+     proc.cmdline contains "| bash" or
+     proc.cmdline contains "| sh")
+  output: >
+    CRITICAL: Processo suspeito detectado - possível reverse shell
+    (user=%user.name container=%container.name command=%proc.cmdline)
+  priority: CRITICAL
+  tags: [network, reverse-shell]
+
+- rule: Write to Sensitive CI/CD Paths
+  desc: Detecta escrita em caminhos sensíveis de CI/CD
+  condition: >
+    open_write and
+    container and
+    (fd.name startswith "/.github/workflows" or
+     fd.name startswith "/home/runner/work/_actions" or
+     fd.name contains ".git/hooks" or
+     fd.name = "/etc/passwd" or
+     fd.name = "/etc/shadow")
+  output: >
+    CRITICAL: Escrita em caminho sensível de CI/CD
+    (user=%user.name container=%container.name file=%fd.name)
+  priority: CRITICAL
+  tags: [filesystem, tampering]
+
+- rule: Credential Access in CI Container
+  desc: Detecta acesso a credenciais em containers de CI
+  condition: >
+    (open_read or open_write) and
+    container and
+    (fd.name contains ".aws/credentials" or
+     fd.name contains ".ssh/id_" or
+     fd.name contains ".gnupg" or
+     fd.name contains "secrets" or
+     fd.name endswith ".pem" or
+     fd.name endswith ".key")
+  output: >
+    WARNING: Acesso a possíveis credenciais em container CI
+    (user=%user.name container=%container.name file=%fd.name)
+  priority: WARNING
+  tags: [credentials, secrets]
+
+- rule: Kernel Module Load Attempt
+  desc: Detecta tentativas de carregar módulos do kernel
+  condition: >
+    spawned_process and
+    (proc.name in (insmod, modprobe, rmmod) or
+     proc.cmdline contains "init_module")
+  output: >
+    CRITICAL: Tentativa de manipular módulo do kernel
+    (user=%user.name container=%container.name command=%proc.cmdline)
+  priority: CRITICAL
+  tags: [kernel, escape]
+
+- rule: Rawsocket Creation
+  desc: Detecta criação de raw sockets (possível packet sniffing)
+  condition: >
+    evt.type = socket and
+    evt.arg.domain = 17 and
+    container
+  output: >
+    WARNING: Criação de raw socket em container
+    (user=%user.name container=%container.name)
+  priority: WARNING
+  tags: [network, sniffing]
+
+- rule: Ptrace Attach Attempt
+  desc: Detecta tentativas de attach via ptrace (debugging/injection)
+  condition: >
+    evt.type = ptrace and
+    evt.arg.request in (PTRACE_ATTACH, PTRACE_SEIZE) and
+    container
+  output: >
+    CRITICAL: Tentativa de ptrace attach em container
+    (user=%user.name container=%container.name target_pid=%evt.arg.pid)
+  priority: CRITICAL
+  tags: [process, injection]
+
+# =============================================================================
+# Macros auxiliares
+# =============================================================================
+
+- macro: spawned_process
+  condition: evt.type = execve and evt.dir = <
+
+- macro: open_read
+  condition: evt.type in (open, openat) and evt.is_open_read = true
+
+- macro: open_write
+  condition: evt.type in (open, openat) and evt.is_open_write = true
+
+- macro: container
+  condition: container.id != host
+
+# =============================================================================
+# Listas de processos permitidos/bloqueados
+# =============================================================================
+
+- list: allowed_ci_processes
+  items: [git, make, gcc, npm, node, python, pip, docker, cosign, syft, gitleaks]
+
+- list: blocked_ci_processes
+  items: [nc, ncat, netcat, nmap, msfconsole, metasploit, sqlmap, hydra, john, hashcat]

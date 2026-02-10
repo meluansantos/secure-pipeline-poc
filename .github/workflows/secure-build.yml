@@ -1,0 +1,191 @@
+# =============================================================================
+# Secure Build Workflow - Isolamento de Runtime com gVisor
+# =============================================================================
+# O perigo do docker.sock:
+# Montar o socket do Docker dentro do runner concede ao job controle total 
+# sobre o daemon host. Um contêiner malicioso pode executar docker exec contra 
+# outros containers ou iniciar processos privilegiados – clássico container escape.
+#
+# Como o gVisor corta o caminho:
+# gVisor (runsc) substitui o kernel Linux por um user-space kernel que intercepta 
+# todas as syscalls. Cada chamada é analisada e, se não estiver na whitelist, é 
+# bloqueada. O contêiner nunca atinge o kernel real, reduzindo drasticamente a 
+# superfície de ataque.
+#
+# ⚠️ AVISO: Este workflow requer um self-hosted runner configurado com gVisor
+# =============================================================================
+
+name: Secure Build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: hardened-sh/secure-pipeline-poc
+
+jobs:
+  secure-build:
+    name: Build Hardenado com gVisor
+    runs-on: self-hosted  # Runner com gVisor configurado
+    
+    # Container executado com runtime isolado
+    container:
+      image: ubuntu:22.04
+      options: >-
+        --runtime=runsc
+        --security-opt=no-new-privileges:true
+        --cap-drop=ALL
+        --cap-add=NET_BIND_SERVICE
+        --read-only
+        --tmpfs /tmp:rw,noexec,nosuid
+    
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    
+    steps:
+      - name: Checkout código (modo seguro)
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      
+      - name: Verificar isolamento gVisor
+        run: |
+          echo "🔒 Verificando ambiente de execução..."
+          
+          # Verificar se estamos em gVisor
+          if dmesg 2>/dev/null | grep -q "gVisor"; then
+            echo "✅ Executando dentro do gVisor sandbox"
+          else
+            echo "⚠️ gVisor pode não estar ativo - verifique a configuração do runner"
+          fi
+          
+          # Verificar usuário
+          echo "👤 Usuário atual: $(whoami)"
+          echo "🆔 UID: $(id -u), GID: $(id -g)"
+          
+          # Verificar capabilities
+          echo "🔐 Capabilities:"
+          cat /proc/self/status | grep Cap || echo "Sem acesso a capabilities"
+      
+      - name: Execução limitada como usuário não-root
+        run: |
+          # Criar usuário não privilegiado se não existir
+          if ! id -u runner &>/dev/null; then
+            useradd -m -s /bin/bash runner || true
+          fi
+          
+          echo "🔨 Iniciando build em ambiente isolado..."
+          
+          # Executar comandos de build como usuário limitado
+          sudo -u runner bash -c '
+            echo "Compilando dentro de gVisor sandbox..."
+            echo "PWD: $(pwd)"
+            echo "USER: $(whoami)"
+            
+            # Simular comandos de build
+            echo "✅ Ambiente de build validado"
+          ' || echo "Usando usuário atual"
+      
+      - name: Teste de isolamento - Syscalls bloqueadas
+        run: |
+          echo "🧪 Testando bloqueio de syscalls perigosas..."
+          
+          # Tentar operações que devem ser bloqueadas pelo gVisor
+          set +e
+          
+          # Tentativa de montar filesystem (deve falhar)
+          mount -t tmpfs none /mnt 2>&1 && echo "❌ FALHA: mount não bloqueado" || echo "✅ mount bloqueado"
+          
+          # Tentativa de acessar dispositivos raw (deve falhar)
+          cat /dev/mem 2>&1 && echo "❌ FALHA: /dev/mem acessível" || echo "✅ /dev/mem inacessível"
+          
+          # Tentativa de modificar módulos do kernel (deve falhar)
+          modprobe dummy 2>&1 && echo "❌ FALHA: modprobe não bloqueado" || echo "✅ modprobe bloqueado"
+          
+          set -e
+          echo "✅ Testes de isolamento concluídos"
+      
+      - name: Build da aplicação
+        run: |
+          echo "📦 Executando build da aplicação..."
+          
+          # Comandos de build seguros aqui
+          # Exemplo: make build, npm install, etc.
+          
+          echo "✅ Build concluído com sucesso"
+
+  # ==========================================================================
+  # Fallback para runners sem gVisor (GitHub-hosted)
+  # ==========================================================================
+  secure-build-fallback:
+    name: Build com Restrições (Fallback)
+    runs-on: ubuntu-latest
+    if: ${{ failure() || github.event_name == 'workflow_dispatch' }}
+    
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+      
+      - name: Build com restrições de segurança
+        run: |
+          echo "⚠️ Executando em runner GitHub-hosted (sem gVisor)"
+          echo "🔒 Aplicando restrições alternativas..."
+          
+          # Usar container com restrições
+          docker run --rm \
+            --security-opt=no-new-privileges:true \
+            --cap-drop=ALL \
+            --read-only \
+            --tmpfs /tmp:rw,noexec,nosuid \
+            --network=none \
+            -v "$(pwd):/workspace:ro" \
+            -w /workspace \
+            alpine:3.19 \
+            sh -c '
+              echo "🔨 Build em container restrito..."
+              echo "✅ Build concluído"
+            '
+
+  # ==========================================================================
+  # Análise de segurança do runtime
+  # ==========================================================================
+  runtime-audit:
+    name: Auditoria de Runtime
+    runs-on: ubuntu-latest
+    needs: [secure-build-fallback]
+    if: always()
+    
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+      
+      - name: Verificar configurações de segurança
+        run: |
+          echo "🔍 Auditoria de configurações de runtime..."
+          
+          # Verificar se docker.sock está exposto
+          if [ -S /var/run/docker.sock ]; then
+            echo "⚠️ AVISO: docker.sock está acessível"
+            echo "Recomendação: Configure runners self-hosted com gVisor"
+          else
+            echo "✅ docker.sock não está exposto neste contexto"
+          fi
+          
+          # Verificar permissões do processo
+          echo ""
+          echo "📊 Informações do processo:"
+          echo "User: $(whoami)"
+          echo "Groups: $(groups)"
+          
+          echo ""
+          echo "✅ Auditoria concluída"

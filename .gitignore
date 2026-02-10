@@ -1,0 +1,87 @@
+# =============================================================================
+# .gitignore - Pipeline Hardening PoC
+# =============================================================================
+
+# Binários
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+/server
+/app
+
+# Arquivos de teste
+*.test
+*.out
+coverage.txt
+coverage.html
+
+# Diretórios de dependências
+vendor/
+node_modules/
+
+# Arquivos de IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Arquivos de sistema
+.DS_Store
+Thumbs.db
+
+# Arquivos de log
+*.log
+logs/
+
+# Arquivos temporários
+tmp/
+temp/
+*.tmp
+
+# Arquivos de ambiente
+.env
+.env.local
+.env.*.local
+*.env
+
+# Chaves e secrets (NUNCA commitar)
+*.pem
+*.key
+*.p12
+*.pfx
+cosign.key
+cosign.pub
+.aws/
+.ssh/
+secrets/
+credentials
+
+# Artefatos de build
+dist/
+build/
+out/
+
+# SBOM gerados localmente
+sbom*.json
+*.spdx
+*.spdx.json
+*.cyclonedx.json
+
+# Relatórios de scan
+*.sarif
+gitleaks-report*
+trivy-results*
+
+# Docker
+.docker/
+
+# Go específico
+go.sum
+
+# Arquivos de cache
+.cache/
+__pycache__/
+*.pyc

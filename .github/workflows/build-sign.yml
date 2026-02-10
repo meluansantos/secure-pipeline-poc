@@ -1,0 +1,204 @@
+# =============================================================================
+# Build, SBOM & Sign Workflow - Proveniência e Integridade de Artefatos
+# =============================================================================
+# Por que assinar só a imagem não basta?
+# Um atacante pode modificar camadas intermediárias ou substituir bibliotecas 
+# sem alterar o hash da imagem final. O supply chain compromise persiste porque 
+# a assinatura não cobre as dependências.
+#
+# Estratégia de cadeia de confiança:
+# 1. Geramos um SBOM com Syft que lista todas as dependências e versões
+# 2. Usamos Cosign para assinar simultaneamente a imagem Docker e o SBOM,
+#    proporcionando non-repudiation
+# =============================================================================
+
+name: Build, SBOM & Sign
+
+on:
+  push:
+    branches: [main, develop]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: hardened-sh/secure-pipeline-poc
+
+jobs:
+  build:
+    name: Build, Generate SBOM & Sign
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: read
+      packages: write
+      id-token: write  # Necessário para OIDC
+      security-events: write
+      attestations: write
+    
+    outputs:
+      image-digest: ${{ steps.build-push.outputs.digest }}
+      image-tag: ${{ steps.meta.outputs.tags }}
+    
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+      
+      # =======================================================================
+      # OIDC - Eliminação de segredos estáticos
+      # Utilizamos OpenID Connect para que o runner receba um JWT que o AWS STS
+      # troca por credenciais temporárias com escopo limitado.
+      # Não há segredo persistente para vazar.
+      # =======================================================================
+      - name: Configurar credenciais AWS via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/GitHubActionsRole
+          aws-region: us-east-1
+          role-session-name: GitHubActions-${{ github.run_id }}
+        continue-on-error: true  # Não falhar se AWS não estiver configurado
+      
+      - name: Configurar Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Login no GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Extrair metadados para Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,prefix=
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+      
+      - name: Build e Push da imagem Docker
+        id: build-push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: true
+          sbom: true
+      
+      # =======================================================================
+      # SBOM - Software Bill of Materials com Syft
+      # =======================================================================
+      - name: Instalar Syft
+        uses: anchore/sbom-action/download-syft@v0
+      
+      - name: Gerar SBOM (SPDX JSON)
+        run: |
+          echo "📋 Gerando SBOM para ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build-push.outputs.digest }}..."
+          syft packages "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build-push.outputs.digest }}" \
+            -o spdx-json=sbom.spdx.json \
+            -o cyclonedx-json=sbom.cyclonedx.json
+          
+          echo "📊 Resumo do SBOM:"
+          jq '.packages | length' sbom.spdx.json | xargs -I{} echo "Total de pacotes: {}"
+      
+      - name: Upload SBOM como artefato
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ github.sha }}
+          path: |
+            sbom.spdx.json
+            sbom.cyclonedx.json
+          retention-days: 90
+      
+      # =======================================================================
+      # Cosign - Assinatura de imagem e atestação
+      # =======================================================================
+      - name: Instalar Cosign
+        uses: sigstore/cosign-installer@v3
+      
+      - name: Assinar imagem Docker com Cosign (Keyless)
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+          DIGEST: ${{ steps.build-push.outputs.digest }}
+        run: |
+          echo "🔏 Assinando imagem com Cosign (keyless/OIDC)..."
+          cosign sign --yes "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${DIGEST}"
+      
+      - name: Atestar SBOM com Cosign
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+          DIGEST: ${{ steps.build-push.outputs.digest }}
+        run: |
+          echo "📜 Atestando SBOM na imagem..."
+          cosign attest --yes \
+            --type spdxjson \
+            --predicate sbom.spdx.json \
+            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${DIGEST}"
+      
+      - name: Verificar assinatura
+        env:
+          DIGEST: ${{ steps.build-push.outputs.digest }}
+        run: |
+          echo "✅ Verificando assinatura da imagem..."
+          cosign verify \
+            --certificate-identity-regexp="https://github.com/${{ github.repository }}.*" \
+            --certificate-oidc-issuer="https://token.actions.githubusercontent.com" \
+            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${DIGEST}" | jq .
+      
+      # =======================================================================
+      # Scan de vulnerabilidades
+      # =======================================================================
+      - name: Scan de vulnerabilidades com Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build-push.outputs.digest }}'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+      
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-results.sarif'
+          category: 'trivy'
+
+  # ==========================================================================
+  # Job para verificação manual da assinatura (exemplo de uso)
+  # ==========================================================================
+  verify:
+    name: Verificar Integridade
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name != 'pull_request'
+    
+    steps:
+      - name: Instalar Cosign
+        uses: sigstore/cosign-installer@v3
+      
+      - name: Verificar assinatura e atestações
+        run: |
+          echo "🔍 Verificando assinatura da imagem..."
+          cosign verify \
+            --certificate-identity-regexp="https://github.com/${{ github.repository }}.*" \
+            --certificate-oidc-issuer="https://token.actions.githubusercontent.com" \
+            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.image-digest }}"
+          
+          echo ""
+          echo "📋 Verificando atestação SBOM..."
+          cosign verify-attestation \
+            --type spdxjson \
+            --certificate-identity-regexp="https://github.com/${{ github.repository }}.*" \
+            --certificate-oidc-issuer="https://token.actions.githubusercontent.com" \
+            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ needs.build.outputs.image-digest }}"
+          
+          echo ""
+          echo "✅ Todas as verificações passaram!"

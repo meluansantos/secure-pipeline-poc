@@ -1,0 +1,66 @@
+# =============================================================================
+# Branch Protection Workflow
+# Aplica proteções automáticas à branch main semanalmente
+# =============================================================================
+# Mitigação aplicada:
+# - CODEOWNERS definido para diretórios críticos
+# - Política de branch que exige commits assinados (GPG/SSH) e review de dois aprovadores
+# - enforce_admins: true impede sobrescritas mesmo por administradores
+# =============================================================================
+
+name: Protect Main
+
+on:
+  schedule:
+    # Executa todo domingo à meia-noite
+    - cron: '0 0 * * SUN'
+  workflow_dispatch:
+    # Permite execução manual para aplicação imediata
+
+jobs:
+  protect:
+    runs-on: ubuntu-latest
+    # Nota: Permissões de branch protection requerem PAT com scope 'repo'
+    # O GITHUB_TOKEN padrão não tem acesso suficiente
+    
+    steps:
+      - name: Aplicar proteção à branch main
+        env:
+          # Requer PAT com permissão 'admin:repo' ou GitHub App com 'administration: write'
+          # Criar em: https://github.com/settings/tokens
+          # Adicionar como secret: Settings > Secrets > ADMIN_TOKEN
+          GH_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+        run: |
+          # Aplicar branch protection via GitHub API
+          # Documentação: https://docs.github.com/en/rest/branches/branch-protection
+          
+          gh api \
+            --method PUT \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            /repos/${{ github.repository }}/branches/main/protection \
+            -f required_status_checks='{"strict":true,"contexts":["build","test","security-scan","secret-scan"]}' \
+            -F enforce_admins=true \
+            -f required_pull_request_reviews='{"dismiss_stale_reviews":true,"require_code_owner_reviews":true,"required_approving_review_count":2}' \
+            -f restrictions=null \
+            -F allow_force_pushes=false \
+            -F allow_deletions=false \
+            -F block_creations=false \
+            -F required_conversation_resolution=true
+          
+          # Habilitar commits assinados (endpoint separado)
+          gh api \
+            --method POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            /repos/${{ github.repository }}/branches/main/protection/required_signatures
+          
+          echo "✅ Branch protection aplicada com sucesso!"
+          echo ""
+          echo "Configurações aplicadas:"
+          echo "  - Status checks obrigatórios: build, test, security-scan, secret-scan"
+          echo "  - Reviews obrigatórios: 2 aprovadores"
+          echo "  - Enforce admins: true"
+          echo "  - Commits assinados: obrigatório"
+          echo "  - Force push: bloqueado"
+          echo "  - Deleção: bloqueada"

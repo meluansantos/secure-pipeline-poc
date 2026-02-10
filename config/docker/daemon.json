@@ -1,0 +1,47 @@
+{
+  "_comment": "Configuração do Docker Daemon para Isolamento com gVisor",
+  "_doc": "Este arquivo deve ser copiado para /etc/docker/daemon.json no host do runner",
+  "_warning": "Requer gVisor (runsc) instalado em /usr/local/bin/runsc",
+  
+  "runtimes": {
+    "runsc": {
+      "path": "/usr/local/bin/runsc",
+      "runtimeArgs": [
+        "--platform=ptrace",
+        "--network=sandbox"
+      ]
+    },
+    "runsc-kvm": {
+      "path": "/usr/local/bin/runsc",
+      "runtimeArgs": [
+        "--platform=kvm"
+      ]
+    }
+  },
+  
+  "default-runtime": "runsc",
+  
+  "features": {
+    "buildkit": true
+  },
+  
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "10m",
+    "max-file": "3"
+  },
+  
+  "storage-driver": "overlay2",
+  
+  "userns-remap": "default",
+  
+  "no-new-privileges": true,
+  
+  "seccomp-profile": "/etc/docker/seccomp-hardened.json",
+  
+  "icc": false,
+  
+  "live-restore": true,
+  
+  "userland-proxy": false
+}

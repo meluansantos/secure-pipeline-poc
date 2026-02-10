@@ -1,0 +1,31 @@
+# =============================================================================
+# CODEOWNERS - Pipeline Hardening PoC
+# Controle de versão à prova de força
+# =============================================================================
+# Por que o histórico pode ser manipulado?
+# Force-push e admin override dão a qualquer desenvolvedor a capacidade de
+# reescrever a história da branch main. Um atacante pode remover commits
+# maliciosos após o fato, apagando evidências e inserindo código vulnerável
+# que o CI aceita como legítimo.
+# =============================================================================
+
+# Diretórios críticos de autenticação
+/auth/    @hardened-sh @sec-lead
+
+# Infraestrutura como código
+/infra/   @hardened-sh @infra-lead
+
+# Módulos de pagamento (alta criticidade)
+/payment/ @hardened-sh @payment-sec
+
+# Configurações de segurança do pipeline
+/.github/ @hardened-sh @sec-lead
+
+# Configurações de runtime e daemon
+/config/  @hardened-sh @devops-lead
+
+# Dockerfile e configurações de container
+Dockerfile @hardened-sh @sec-lead
+
+# Fallback - todos os outros arquivos
+*         @hardened-sh
