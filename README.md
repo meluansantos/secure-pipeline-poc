@@ -1,10 +1,10 @@
 # 🔒Pipeline Hardening PoC
 
-PoC que montei pra estudar hardening de pipeline CI/CD. Comecei depois de ler sobre o caso do Codecov e ficar incomodado com o tanto de pipeline que eu já tinha subido sem pensar direito em supply chain. Runner com root, secret estática colada no repo, zero verificação de integridade — o básico do que não deveria existir.
+PoC que montei pra estudar hardening de pipeline CI/CD. Comecei depois de ler sobre o caso do Codecov e ficar incomodado com o tanto de pipeline que eu já tinha subido sem pensar direito em supply chain. Runner com root, secret estática colada no repo, zero verificação de integridade, o básico do que não deveria existir.
 
 O repositório não é um projeto de produção. É um lab onde eu fui testando cada contramedida separadamente até entender o que realmente faz diferença e o que é teatro de segurança.
 
-## O que tem aqui
+## 🤔 O que tem aqui
 
 Branch protection configurada via workflow agendado, não na mão. Commits assinados, 2 approvals obrigatórios, enforce em admin. Parece exagero, mas force-push na main é literalmente como um atacante apaga evidência depois de injetar código.
 
