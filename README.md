@@ -1,18 +1,18 @@
 # 🔒Pipeline Hardening PoC
 
-PoC que montei pra estudar hardening de pipeline CI/CD. Comecei depois de ler sobre o caso do Codecov e ficar incomodado com o tanto de pipeline que eu já tinha subido sem pensar direito em supply chain. Runner com root, secret estática colada no repo, zero verificação de integridade, o básico do que não deveria existir.
+PoC que montei pra estudar hardening de pipeline CI/CD. Comecei depois de ler sobre o caso do **Codecov** e ficar incomodado com o tanto de pipeline que eu já tinha subido sem pensar direito em supply chain. Runner com `root`, secret estática colada no repo, zero verificação de integridade, o básico do que não deveria existir.
 
 O repositório não é um projeto de produção. É um lab onde eu fui testando cada contramedida separadamente até entender o que realmente faz diferença e o que é teatro de segurança.
 
 ## 🤔 O que tem aqui
 
-Branch protection configurada via workflow agendado, não na mão. Commits assinados, 2 approvals obrigatórios, enforce em admin. Parece exagero, mas force-push na main é literalmente como um atacante apaga evidência depois de injetar código.
+🛡️ **Branch protection** configurada via workflow agendado, não na mão. Commits assinados, 2 approvals obrigatórios, enforce em admin. Parece exagero, mas `force-push` na `main` é literalmente como um atacante apaga evidência depois de injetar código.
 
-O build usa OIDC pra autenticar na AWS em vez de `AWS_ACCESS_KEY` fixa. O runner pega um JWT do GitHub, troca por credencial temporária com escopo limitado. Se o runner for comprometido, a credencial morre em minutos.
+🔑 O build usa **OIDC** pra autenticar na AWS em vez de `AWS_ACCESS_KEY` fixa. O runner pega um JWT do GitHub, troca por credencial temporária com escopo limitado. Se o runner for comprometido, a credencial morre em minutos.
 
-Pra integridade dos artefatos: SBOM gerado com Syft (SPDX + CycloneDX) e assinatura keyless com Cosign via Sigstore. Dá pra qualquer um verificar que a imagem saiu desse repo e que ninguém trocou camada entre o build e o deploy.
+📦 Pra integridade dos artefatos: **SBOM** gerado com `Syft` (SPDX + CycloneDX) e assinatura keyless com `Cosign` via **Sigstore**. Dá pra qualquer um verificar que a imagem saiu desse repo e que ninguém trocou camada entre o build e o deploy.
 
-A parte de runtime foi a que mais apanhei. O gVisor (`runsc`) coloca um kernel em user-space entre o container e o host — o container nunca faz syscall direto no kernel real. O Falco fica em cima monitorando comportamento suspeito (reverse shell, acesso ao `docker.sock`, ptrace, etc). As regras customizadas tão em `config/falco/`.
+🧱 A parte de runtime foi a que mais apanhei. O **gVisor** (`runsc`) coloca um kernel em user-space entre o container e o host, o container nunca faz syscall direto no kernel real. O **Falco** fica em cima monitorando comportamento suspeito (reverse shell, acesso ao `docker.sock`, `ptrace`, etc). As regras customizadas tão em `config/falco/`.
 
 ```
 .github/workflows/    -> build, scan de secrets, branch protection
